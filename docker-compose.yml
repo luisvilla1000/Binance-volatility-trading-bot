@@ -1,0 +1,7 @@
+version: '3'
+services:
+  bot: 
+    build: .
+    environment:
+      - binance_api_stalkbot_testnet=npwGL4pmBWLCUpNiKm95C8g88J4043AoloUv0ZEviwsxp6A9GnVPvKkcCGkG69o2
+      - binance_secret_stalkbot_testnet=5Pwdbcf5n16UnKXzrIH9cARL4YCaTzlhnSdn7YBcC3LZQHdeKM6LKZM0ottsz7s7

@@ -13,22 +13,23 @@ from itertools import count
 
 # used to store trades and sell assets
 import json
+import sys
 
 
 # Switch between testnet and mainnet
 # Setting this to False will use REAL funds, use at your own risk
 # Define your API keys below in order for the toggle to work
-TESTNET = True
+TESTNET = False #True
 
 
 # Get binance key and secret for TEST and MAINNET
 # The keys below are pulled from environment variables using os.getenv
 # Simply remove this and use the following format instead: api_key_test = 'YOUR_API_KEY'
-api_key_test = os.getenv('binance_api_stalkbot_testnet')
-api_secret_test = os.getenv('binance_secret_stalkbot_testnet')
+api_key_test = "npwGL4pmBWLCUpNiKm95C8g88J4043AoloUv0ZEviwsxp6A9GnVPvKkcCGkG69o2" #os.getenv('binance_api_stalkbot_testnet')
+api_secret_test = "5Pwdbcf5n16UnKXzrIH9cARL4YCaTzlhnSdn7YBcC3LZQHdeKM6LKZM0ottsz7s7" #os.getenv('binance_secret_stalkbot_testnet')
 
-api_key_live = os.getenv('binance_api_stalkbot_live')
-api_secret_live = os.getenv('binance_secret_stalkbot_live')
+api_key_live = "xDT2x3AI14tVz0qehtGMcyFKyXd56JRlLIcJqwoZpF6X5i882C8lljsGVnymdZk8" #os.getenv('binance_api_stalkbot_live')
+api_secret_live = "yBAjJ5JMXNZd1XeCKK787eDzHRpyAmUoenCbOGNWkMwQwxUTCviE88Aykxng8qb6" #os.getenv('binance_secret_stalkbot_live')
 
 
 # Authenticate with the client
@@ -43,7 +44,6 @@ else:
 
 
 
-
 ####################################################
 #                   USER INPUTS                    #
 # You may edit to adjust the parameters of the bot #
@@ -53,7 +53,7 @@ else:
 PAIR_WITH = 'USDT'
 
 # Define the size of each trade, by default in USDT
-QUANTITY = 100
+QUANTITY = 15.00
 
 # List of pairs to exlcude
 # by default we're excluding the most popular fiat pairs
@@ -67,11 +67,15 @@ TIME_DIFFERENCE = 5
 CHANGE_IN_PRICE = 3
 
 # define in % when to sell a coin that's not making a profit
-STOP_LOSS = 3
+STOP_LOSS = 2
 
 # define in % when to take profit on a profitable coin
-TAKE_PROFIT = 6
+TAKE_PROFIT = 3
 
+# BINANCE cannot always sell all that it buys. Select in % how much to sell
+# Set to True to toggle SELL_AMOUNT
+CAPPED_SELL = True
+SELL_AMOUNT = 99.0
 
 ####################################################
 #                END OF USER INPUTS                #
@@ -120,7 +124,7 @@ def wait_for_price():
     initial_price = get_price()
 
     while initial_price['BNBUSDT']['time'] > datetime.now() - timedelta(minutes=TIME_DIFFERENCE):
-        print(f'not enough time has passed yet...')
+        print(f'Not enough time has passed yet, will wait {TIME_DIFFERENCE} {"minutes" if TIME_DIFFERENCE > 1 else "minute"}...')
 
         # let's wait here until the time passess...
         time.sleep(60*TIME_DIFFERENCE)
@@ -130,7 +134,7 @@ def wait_for_price():
 
         # calculate the difference between the first and last price reads
         for coin in initial_price:
-            threshold_check = (float(last_price[coin]['price']) - float(initial_price[coin]['price'])) / float(last_price[coin]['price']) * 100
+            threshold_check = (float(last_price[coin]['price']) - float(initial_price[coin]['price'])) / float(initial_price[coin]['price']) * 100
 
             # each coin with higher gains than our CHANGE_IN_PRICE is added to the volatile_coins dict
             if threshold_check > CHANGE_IN_PRICE:
@@ -141,6 +145,9 @@ def wait_for_price():
 
         if len(volatile_coins) < 1:
                 print(f'No coins moved more than {CHANGE_IN_PRICE}% in the last {TIME_DIFFERENCE} minute(s)')
+        else:
+            marklist = sorted(volatile_coins.items(), key=lambda x:x[1], reverse=True)
+            volatile_coins = dict(marklist)
 
         return volatile_coins, len(volatile_coins), last_price
 
@@ -246,7 +253,7 @@ def sell_coins():
 
         # check that the price is above the take profit or below the stop loss
         if float(last_price[coin]['price']) > TP or float(last_price[coin]['price']) < SL:
-            print(f"TP or SL reached, selling {coins_bought[coin]['volume']} {coin}...")
+            print(f"TP {TP} or SL {SL} reached, selling {coins_bought[coin]['volume']} {coin} at {last_price[coin]['price']}")
 
             if TESTNET :
                 # create test order before pushing an actual order
@@ -255,20 +262,29 @@ def sell_coins():
             # try to create a real order if the test orders did not raise an exception
             try:
 
-                # only sell 99.25% of the lot to avoid LOT exceptions
-                #sell_amount = coins_bought[coin]['volume']*99.25/100
-                sell_amount = coins_bought[coin]['volume']
+                #if CAPPED_SELL:
+                #    sell_amount = coins_bought[coin]['volume']*SELL_AMOUNT/100
+                #else:
+                #    sell_amount = coins_bought[coin]['volume']
+                   
+                sell_amount = coins_bought[coin]['volume']*99.25/100
+                #sell_amount = coins_bought[coin]['volume']
                 decimals = len(str(coins_bought[coin]['volume']).split("."))
 
                 # convert to correct volume
                 sell_amount = float('{:.{}f}'.format(sell_amount, decimals))
+
+                info = client.get_symbol_info(symbol=coin)
+                f = [i["stepSize"] for i in info["filters"] if i["filterType"] == "LOT_SIZE"][0]
+                sell_amount = round(sell_amount, f.index("1") - 1)
+
+                print(f"Selling {sell_amount} {coin}...")
 
                 sell_coins_limit = client.create_order(
                     symbol = coin,
                     side = 'SELL',
                     type = 'MARKET',
                     quantity = sell_amount  # coins_bought[coin]['volume']
-
                 )
 
             # error handling here in case position cannot be placed
@@ -279,7 +295,7 @@ def sell_coins():
             else:
                 coins_sold[coin] = coins_bought[coin]
         else:
-            print(f'TP or SL not yet reached, not selling {coin} for now...')
+            print(f'TP {TP} or SL {SL} not yet reached, not selling {coin} for now...')
 
     return coins_sold
 
@@ -319,10 +335,11 @@ if __name__ == '__main__':
 
     if not TESTNET:
         print('WARNING: You are using the Mainnet and live funds. As a safety measure, the script will start executing in 30 seconds.')
-        time.sleep(30)
+        time.sleep(3)
 
     for i in count():
-        orders, last_price, volume = buy()
-        update_porfolio(orders, last_price, volume)
         coins_sold = sell_coins()
         remove_from_portfolio(coins_sold)
+        orders, last_price, volume = buy()
+        update_porfolio(orders, last_price, volume)
+
