@@ -1,0 +1,5 @@
+.env*
+*_coins_bought.json
+coins_bought.json
+trades.txt
+!.env.example 
