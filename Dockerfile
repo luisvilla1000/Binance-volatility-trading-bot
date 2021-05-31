@@ -5,6 +5,6 @@ WORKDIR /usr/src/app
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-COPY BinanceDetectMoonings.py .
+COPY . .
 
-CMD [ "python3", "./BinanceDetectMoonings.py" ]
+CMD [ "python3", "./BinanceDetectMooningsPlus.py" ]
