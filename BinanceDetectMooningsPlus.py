@@ -21,6 +21,7 @@ import sys
 import argparse
 
 from dotenv import load_dotenv
+import math as m
 load_dotenv()
 
 ARG_ENV_HELP = '''
@@ -54,30 +55,30 @@ QUANTITY = 15.00
 # and some margin keywords, as we're only working on the SPOT account
 FIATS = ['EURUSDT', 'GBPUSDT', 'JPYUSDT', 'USDUSDT', 'DOWN', 'UP']
 
-# the amount of time in MINUTES to calculate the differnce from the current price
-BUY_TIME_DIFFERENCE = 5
+# the amount of time in SECONDS to calculate the differnce from the current price
+BUY_TIME_DIFFERENCE = 180
 
 # Time in seconds to query a sell
 SELL_TIME_DIFFERENCE = 30
 
 # the difference in % between the first and second checks for the price, by default set at 10 minutes apart.
-CHANGE_IN_PRICE = 2
+CHANGE_IN_PRICE = 3
 
 # define in % when to sell a coin that's not making a profit
 STOP_LOSS = 2
-MAX_STOP_LOSS = 3
+MAX_STOP_LOSS = 4
 
 # define in % when to take profit on a profitable coin
 TAKE_PROFIT = 6
-MIN_TAKE_PROFIT = 2
+MIN_TAKE_PROFIT = 1.5
 
 # BINANCE cannot always sell all that it buys. Select in % how much to sell
 # Set to True to toggle SELL_AMOUNT
 CAPPED_SELL = True
-SELL_AMOUNT = 99.0
+SELL_AMOUNT = 99.5
 
 # Use custom tickers.txt list for filtering pairs
-CUSTOM_LIST = True
+CUSTOM_LIST = False
 
 # Use log file for trades
 LOG_TRADES = True
@@ -100,6 +101,7 @@ def load_arguments():
         help=ARG_ENV_HELP)
     return my_parser.parse_args()
 
+
 def get_price():
     '''Return the current price for all coins on binance'''
 
@@ -111,7 +113,7 @@ def get_price():
     for coin in prices:
 
         if CUSTOM_LIST:
-            if PAIR_WITH in coin['symbol'] and any(item in coin['symbol'] for item in tickers) and all(item not in coin['symbol'] for item in FIATS):
+            if any(item + PAIR_WITH == coin['symbol'] for item in tickers) and all(item not in coin['symbol'] for item in FIATS):
                 initial_price[coin['symbol']] = {
                     'price': coin['price'], 'time': datetime.now()}
         else:
@@ -132,12 +134,17 @@ def wait_for_price():
     # print(f"initial_price:")
     # print(f"{initial_price}")
 
-    while initial_price['BNB' + PAIR_WITH]['time'] > datetime.now() - timedelta(minutes=BUY_TIME_DIFFERENCE):
+    while initial_price['BNB' + PAIR_WITH]['time'] > datetime.now() - timedelta(seconds=BUY_TIME_DIFFERENCE-3):
+
+        #print(f"Initial: {initial_price['BNB' + PAIR_WITH]['time']}")
+        #print(f"Time: {datetime.now()}")
+        #print(f"Delta: {initial_price['BNB' + PAIR_WITH]['time'] - timedelta(seconds=BUY_TIME_DIFFERENCE-3)}")
+
         print(
-            f'Not enough time has passed yet, will wait {BUY_TIME_DIFFERENCE} {"minutes" if BUY_TIME_DIFFERENCE > 1 else "minute"}...')
+            f'Not enough time has passed yet, will wait {BUY_TIME_DIFFERENCE} {"seconds" if BUY_TIME_DIFFERENCE > 1 else "second"}...')
 
         # let's wait here until the time passess...
-        time.sleep(60*BUY_TIME_DIFFERENCE)
+        time.sleep(BUY_TIME_DIFFERENCE)
 
     else:
         last_price = get_price()
@@ -167,11 +174,11 @@ def wait_for_price():
                 volatile_coins[coin] = round(volatile_coins[coin], 3)
 
                 print(
-                    f'{coin} has gained {volatile_coins[coin]}% in the last {BUY_TIME_DIFFERENCE} minutes, calculating volume in {PAIR_WITH}')
+                    f'{coin} has gained {volatile_coins[coin]}% in the last {BUY_TIME_DIFFERENCE} seconds, calculating volume in {PAIR_WITH}')
 
         if len(volatile_coins) < 1:
             print(
-                f'No coins moved more than {CHANGE_IN_PRICE}% in the last {BUY_TIME_DIFFERENCE} minute(s)')
+                f'No coins moved more than {CHANGE_IN_PRICE}% in the last {BUY_TIME_DIFFERENCE} second(s)')
             print(
                 f'Max movement {float(infoChange):.2f}% by {infoCoin} from {float(infoStart):.4f} to {float(infoStop):.4f}')
         else:
@@ -289,15 +296,20 @@ def sell_coin(coins_bought, coin, coins_sold):
 
         sell_amount = coins_bought[coin]['volume']*SELL_AMOUNT/100
         #sell_amount = coins_bought[coin]['volume']
-        decimals = len(str(coins_bought[coin]['volume']).split("."))
+        #decimals = len(str(coins_bought[coin]['volume']).split("."))
 
         # convert to correct volume
-        sell_amount = float('{:.{}f}'.format(sell_amount, decimals))
+        #sell_amount = float('{:.{}f}'.format(sell_amount, decimals))
 
         info = client.get_symbol_info(symbol=coin)
         f = [i["stepSize"]
              for i in info["filters"] if i["filterType"] == "LOT_SIZE"][0]
-        sell_amount = round(sell_amount, f.index("1") - 1)
+        precision = f.index("1") - 1
+
+        if precision == -1:
+            sell_amount = m.floor(sell_amount)
+        else:
+            sell_amount = round(sell_amount, precision)
 
         print(f"Selling {sell_amount} {coin}...")
 
@@ -315,10 +327,6 @@ def sell_coin(coins_bought, coin, coins_sold):
     # run the else block if coin has been sold and create a dict for each coin sold
     else:
         coins_sold[coin] = coins_bought[coin]
-        
-        # Log trade
-        if LOG_TRADES:
-            write_log(f"Sell: {coins_sold[coin]['volume']} {coin} - {BuyPrice} - {LastPrice} : {PriceChange:.2f}%")
 
     return coins_sold
 
@@ -333,6 +341,7 @@ def sell_coins():
         print(f"Nothing to sell...")
 
     for coin in list(coins_bought):
+        must_sell = False
         # define stop loss and take profit
         TP = float(coins_bought[coin]['bought_at']) + \
             (float(coins_bought[coin]['bought_at']) * TAKE_PROFIT) / 100
@@ -350,21 +359,28 @@ def sell_coins():
         if float(last_price[coin]['price']) > TP:
             print(
                 f"TP {TP}, selling {coins_bought[coin]['volume']} {coin} - {BuyPrice} - {LastPrice} : {PriceChange:.2f}%")
-            coins_sold = sell_coin(coins_bought, coin, coins_sold)
+            must_sell = True
         elif float(last_price[coin]['price']) > MTP:
             print(
                 f"MTP {MTP}, selling {coins_bought[coin]['volume']} {coin} - {BuyPrice} - {LastPrice} : {PriceChange:.2f}%")
-            coins_sold = sell_coin(coins_bought, coin, coins_sold)
+            must_sell = True
         elif float(last_price[coin]['price']) < MSL:
             print(
                 f"mSL {MSL} reached, not selling {coin} for now... Last price at: {last_price[coin]['price']}")
         elif float(last_price[coin]['price']) < SL:
             print(
                 f"SL {SL}, selling {coins_bought[coin]['volume']} {coin} - {BuyPrice} - {LastPrice} : {PriceChange:.2f}%")
-            coins_sold = sell_coin(coins_bought, coin, coins_sold)
+            must_sell = True
         else:
             print(
-                f"TP {TP} or SL {SL} not yet reached, not selling {coin} for now... Last price at: {last_price[coin]['price']}")
+                f"mTP {MTP} or SL {SL} not yet reached, not selling {coin} for now... Last price at: {last_price[coin]['price']}")
+
+        if must_sell:
+            coins_sold = sell_coin(coins_bought, coin, coins_sold)
+            # Log trade
+            if LOG_TRADES:
+                write_log(
+                    f"Sell: {coins_sold[coin]['volume']} {coin} - {BuyPrice} - {LastPrice} : {PriceChange:.2f}%")
 
     return coins_sold
 
@@ -434,7 +450,7 @@ if __name__ == '__main__':
         TESTNET = True
 
     # Load custom tickerlist from file tickers.txt into array tickers *BNB must be in list for script to run.
-    tickers=[line.strip() for line in open('tickers.txt')]
+    tickers = [line.strip() for line in open('tickers.txt')]
 
     # try to load all the coins bought by the bot if the file exists and is not empty
     coins_bought = {}
@@ -444,7 +460,7 @@ if __name__ == '__main__':
 
     # Authenticate with the client
     if TESTNET:
-        coins_bought_file_path = 'testnet_' + coins_bought_file_path # seperate files
+        coins_bought_file_path = 'testnet_' + coins_bought_file_path  # seperate files
         client = Client(api_key_test, api_secret_test)
         # The API URL needs to be manually changed in the library to work on the TESTNET
         client.API_URL = 'https://testnet.binance.vision/api'
@@ -453,9 +469,9 @@ if __name__ == '__main__':
         client = Client(api_key_live, api_secret_live)
 
     # if saved coins_bought json file exists and it's not empty then load it
-    if os.path.isfile(coins_bought_file_path) and os.stat(coins_bought_file_path).st_size!= 0:
+    if os.path.isfile(coins_bought_file_path) and os.stat(coins_bought_file_path).st_size != 0:
         with open(coins_bought_file_path) as file:
-                coins_bought = json.load(file)
+            coins_bought = json.load(file)
 
     if not TESTNET:
         print('WARNING: You are using the Mainnet and live funds. As a safety measure, the script will start executing in 30 seconds.')
@@ -466,8 +482,6 @@ if __name__ == '__main__':
     format = "[%(threadName)s] - %(asctime)s: %(message)s"
     logging.basicConfig(format=format, level=logging.INFO,
                         datefmt="%H:%M:%S")
-
-
 
     x1 = threading.Thread(target=sell_bot, name='Sell')
     x2 = threading.Thread(target=buy_bot, name='Buy')

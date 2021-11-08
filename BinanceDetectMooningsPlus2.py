@@ -59,23 +59,23 @@ QUANTITY = 15.00
 FIATS = ['EURUSDT', 'GBPUSDT', 'JPYUSDT', 'USDUSDT', 'DOWN', 'UP']
 
 # the amount of time in SECONDS to calculate the differnce from the current price
-BUY_TIME_DIFFERENCE = 30
+BUY_TIME_DIFFERENCE = 60
 
 # Time in seconds to query a sell
-SELL_TIME_DIFFERENCE = 60
+SELL_TIME_DIFFERENCE = 30
 
 # the difference in % between the first and second checks for the price, by default set at 10 minutes apart.
-CHANGE_IN_PRICE = 0.3
+CHANGE_IN_PRICE = 0.7
 
 MAX_PRICES_SAMPLES = 12
 
 # define in % when to sell a coin that's not making a profit
-STOP_LOSS = 4
-MAX_STOP_LOSS = 10
+STOP_LOSS = 1
+MAX_STOP_LOSS = 4
 
 # define in % when to take profit on a profitable coin
 TAKE_PROFIT = 6
-MIN_TAKE_PROFIT = 2.5
+MIN_TAKE_PROFIT = 1
 
 # BINANCE cannot always sell all that it buys. Select in % how much to sell
 # Set to True to toggle SELL_AMOUNT
@@ -130,7 +130,7 @@ def process_ticker(coin):
 
     tickers_info[coin['symbol']]['avg'] = avg
     tickers_info[coin['symbol']]['diff'] = diff
-    tickers_info[coin['symbol']]['monotonic'] = monotonic(prices)
+
 
 def get_price():
     '''Return the current price for all coins on binance'''
@@ -154,7 +154,8 @@ def get_price():
     return tickers_info
 
 def filter_gain_coins():
-    volatile_coins = dict(filter(lambda item: (item[1]['diff'] > CHANGE_IN_PRICE and item[1]['monotonic'] == 'increasing'), tickers_info.items()))
+    volatile_coins = dict(filter(lambda item: len(item[1]['prices']) > (
+        MAX_PRICES_SAMPLES/2) and item[1]['diff'] > CHANGE_IN_PRICE, tickers_info.items()))
     
     if len(volatile_coins) > 0:
         marklist = sorted(volatile_coins.items(),
@@ -219,6 +220,8 @@ def buy():
 
     volume, last_price = convert_volume()
     orders = {}
+
+    return orders, last_price, volume
 
     for coin in volume:
 
@@ -287,18 +290,14 @@ def sell_coin(coins_bought, coin, coins_sold):
         #sell_amount = float('{:.{}f}'.format(sell_amount, decimals))
 
         info = client.get_symbol_info(symbol=coin)
-                
         f = [i["stepSize"]
              for i in info["filters"] if i["filterType"] == "LOT_SIZE"][0]
         precision = f.index("1") - 1
 
-        print(f"Coin precision: {precision}")
-
         if precision == -1:
-            sell_amount = truncate(sell_amount, 0)
+            sell_amount = m.floor(sell_amount)
         else:
-            #sell_amount = round(sell_amount, precision)
-            sell_amount = truncate(sell_amount, precision)
+            sell_amount = round(sell_amount, precision)
 
         print(f"Selling {sell_amount} {coin}...")
 
@@ -368,12 +367,9 @@ def sell_coins():
             coins_sold = sell_coin(coins_bought, coin, coins_sold)
             # Log trade
             if LOG_TRADES:
-                try:
-                    write_log(
-                        f"Sell: {coins_sold[coin]['volume']} {coin} - {BuyPrice} - {LastPrice} : {PriceChange:.2f}%")
-                except KeyError:
-                    print(f"Error selling {coin}")
-                    
+                write_log(
+                    f"Sell: {coins_sold[coin]['volume']} {coin} - {BuyPrice} - {LastPrice} : {PriceChange:.2f}%")
+
     return coins_sold
 
 
@@ -387,9 +383,7 @@ def update_porfolio(orders, last_price, volume):
             'orderid': orders[coin][0]['orderId'],
             'timestamp': orders[coin][0]['time'],
             'bought_at': last_price[coin]['last_price'],
-            'volume': volume[coin],
-            'stop_loss': -STOP_LOSS,
-            'take_profit': TAKE_PROFIT
+            'volume': volume[coin]
         }
 
         # save the coins in a json file in the same directory
@@ -421,11 +415,9 @@ def sell_bot():
         remove_from_portfolio(coins_sold)
         
 def buy_bot():
-    time.sleep(60)
     logging.info("buy_bot: Starting")
     for i in count():
         time.sleep(BUY_TIME_DIFFERENCE)
-        tickers_info = get_price()
         orders, last_price, volume = buy()
         update_porfolio(orders, last_price, volume)
 
@@ -433,9 +425,8 @@ def buy_bot():
 def fetch_bot():
     logging.info("fetch_bot: Starting")
     for i in count():
-        print(f"Fetch prices...")
         tickers_info = get_price()
-        time.sleep(20)
+        time.sleep(15)
 
 
 def write_log(logline):
@@ -451,25 +442,10 @@ def moving_average(x, w):
 def difference(x, b):
     try:
         d = (1 - (b / x)) * 100
-        #d = ((b - x) / x)
     except ZeroDivisionError:
         d = 0
     return d
 
-def truncate(number, digits) -> float:
-    stepper = 10.0 ** digits
-    return m.trunc(stepper * number) / stepper
-
-def monotonic(x):
-    dx = np.diff(x)
-    m = 'volatile'
-    
-    if np.all(dx <= 0):
-        m = 'decreasing'
-    elif np.all(dx >= 0):
-        m = 'increasing'
-    
-    return m
 
 if __name__ == '__main__':
     print('Press Ctrl-Q to stop the script')
